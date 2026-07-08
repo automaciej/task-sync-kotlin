@@ -218,11 +218,12 @@ internal class FakeNetworkSource : NetworkSource<FakeContent, FakeListContent> {
     }
 
     override suspend fun completeRecord(remoteListId: String, remoteId: String) = Unit
+    override suspend fun uncompleteRecord(remoteListId: String, remoteId: String) = Unit
     override suspend fun deleteRecord(remoteListId: String, remoteId: String) = Unit
 }
 
 internal class FakeSyncErrorClassifier : SyncErrorClassifier {
-    override fun classify(e: Exception): SyncErrorKind = SyncErrorKind.PULL_FAILED
+    override fun classifySpecial(e: Exception): SyncErrorKind? = null
     override fun httpStatus(e: Exception): Int? = null
     override fun extractConsentIntent(e: Exception): Any? = null
 }

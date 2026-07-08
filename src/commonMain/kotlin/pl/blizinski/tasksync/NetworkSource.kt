@@ -19,5 +19,9 @@ interface NetworkSource<T, TList> {
     suspend fun createRecord(remoteListId: String, content: T): RemoteRecord<T>
     suspend fun updateRecord(remoteListId: String, remoteId: String, content: T)
     suspend fun completeRecord(remoteListId: String, remoteId: String)
+    /** Symmetric with [completeRecord] — [isCompleted] is a generic envelope field ([SyncedRecord]),
+     * not part of opaque [T], so reverting completion needs its own method rather than an
+     * update-with-side-parameter hack. */
+    suspend fun uncompleteRecord(remoteListId: String, remoteId: String)
     suspend fun deleteRecord(remoteListId: String, remoteId: String)
 }

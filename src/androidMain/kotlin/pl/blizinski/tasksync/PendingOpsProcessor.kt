@@ -53,8 +53,10 @@ class PendingOpsProcessor<T, TList>(
      *
      * Rules (applied in sequence):
      * - CREATE + DELETE -> empty (never touch the server)
-     * - Any DELETE -> [DELETE] only (skip preceding UPDATE/COMPLETE)
-     * - No DELETE -> the last UPDATE (if any) plus all COMPLETEs, in creation order
+     * - Any DELETE -> [DELETE] only (skip preceding UPDATE/COMPLETE/UNCOMPLETE)
+     * - No DELETE -> the last UPDATE (if any) plus all COMPLETE/UNCOMPLETEs, in creation order
+     *   (kept in full, not collapsed to the last one — sending redundant-but-ordered
+     *   COMPLETE/UNCOMPLETE calls still converges to the correct final state)
      */
     internal fun merge(ops: List<PendingOp>): List<PendingOp> {
         if (ops.isEmpty()) return emptyList()
@@ -75,7 +77,7 @@ class PendingOpsProcessor<T, TList>(
         }
 
         ops.lastOrNull { it.type == OpType.UPDATE_RECORD }?.let { result += it }
-        ops.filter { it.type == OpType.COMPLETE_RECORD }.forEach { result += it }
+        ops.filter { it.type == OpType.COMPLETE_RECORD || it.type == OpType.UNCOMPLETE_RECORD }.forEach { result += it }
 
         return result.sortedBy { it.createdAt }
     }
@@ -127,6 +129,7 @@ class PendingOpsProcessor<T, TList>(
                 OpType.CREATE_RECORD -> executeCreate(op)
                 OpType.UPDATE_RECORD -> executeUpdate(op)
                 OpType.COMPLETE_RECORD -> executeComplete(op)
+                OpType.UNCOMPLETE_RECORD -> executeUncomplete(op)
                 OpType.DELETE_RECORD -> executeDelete(op)
                 OpType.CREATE_LIST -> executeCreateList(op)
                 OpType.UPDATE_LIST -> executeUpdateList(op)
@@ -136,7 +139,7 @@ class PendingOpsProcessor<T, TList>(
         } catch (e: Exception) {
             SyncError(
                 occurredAt = System.currentTimeMillis(),
-                kind = errorClassifier.classify(e),
+                kind = errorClassifier.classifySpecial(e) ?: SyncErrorKind.PUSH_FAILED,
                 entityLocalId = op.entityLocalId,
                 httpStatus = errorClassifier.httpStatus(e),
                 message = e.message ?: "Unknown error",
@@ -174,6 +177,15 @@ class PendingOpsProcessor<T, TList>(
         val remoteListId = listEntity.remoteId ?: return
 
         network.completeRecord(remoteListId, remoteId)
+    }
+
+    private suspend fun executeUncomplete(op: PendingOp) {
+        val entity = store.getRecordByLocalId(op.entityLocalId) ?: return
+        val remoteId = entity.remoteId ?: return
+        val listEntity = store.getListByLocalId(op.listLocalId) ?: return
+        val remoteListId = listEntity.remoteId ?: return
+
+        network.uncompleteRecord(remoteListId, remoteId)
     }
 
     private suspend fun executeDelete(op: PendingOp) {

@@ -57,7 +57,7 @@ class SyncEngine<T, TList>(
             val consentIntent = errorClassifier.extractConsentIntent(e)
             val pullError = SyncError(
                 occurredAt = System.currentTimeMillis(),
-                kind = if (consentIntent != null) SyncErrorKind.CONSENT_REQUIRED else errorClassifier.classify(e),
+                kind = if (consentIntent != null) SyncErrorKind.CONSENT_REQUIRED else (errorClassifier.classifySpecial(e) ?: SyncErrorKind.PULL_FAILED),
                 entityLocalId = null,
                 httpStatus = errorClassifier.httpStatus(e),
                 message = e.message ?: "Unknown error during pull",
@@ -116,7 +116,7 @@ class SyncEngine<T, TList>(
                 }
                 errors += SyncError(
                     occurredAt = now,
-                    kind = errorClassifier.classify(e),
+                    kind = (errorClassifier.classifySpecial(e) ?: SyncErrorKind.PULL_FAILED),
                     entityLocalId = null,
                     httpStatus = errorClassifier.httpStatus(e),
                     message = e.message ?: "Failed fetching records for list ${remoteList.remoteId}",
