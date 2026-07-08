@@ -7,19 +7,20 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * WorkManager worker that runs one full sync cycle (flush + pull).
+ * WorkManager worker that runs one full sync cycle (flush + pull) for one [instanceKey].
  *
  * The worker self-schedules its next run using the adaptive interval: the current interval is
  * passed as [KEY_INTERVAL_MS] input data, and the next interval is computed from
  * [computeNextIntervalMs] based on whether the pull found remote changes.
  *
- * Dependencies ([SyncWorkerDependencies]) are set by the consuming store before the first work
- * request is enqueued. Only one store instance per process is supported — same constraint as
- * the original google-tasks-kotlin implementation this was extracted from; the star-projected
- * [SyncEngine] reference means this is not a generics limitation, just an unaddressed one
- * (multi-account polling would need per-account unique work names, not a single static slot).
+ * [instanceKey] (typically the consuming store's database file name — unique per connected
+ * account) keys both the WorkManager unique work name ([workName]) and the
+ * [SyncWorkerDependencies] lookup, so multiple concurrently-connected accounts (e.g. a Google
+ * account and a Microsoft account, or two accounts of the same source type) each get their own
+ * independent polling chain instead of colliding on a single shared slot/work name.
  */
 internal class SyncWorker(
     appContext: Context,
@@ -27,16 +28,17 @@ internal class SyncWorker(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
+        val instanceKey = inputData.getString(KEY_INSTANCE_KEY) ?: return Result.failure()
         val currentIntervalMs = inputData.getLong(KEY_INTERVAL_MS, DEFAULT_INTERVAL_MS)
 
-        val deps = SyncWorkerDependencies.current
+        val deps = SyncWorkerDependencies[instanceKey]
         if (deps == null) {
             // Process was started by WorkManager without the store being initialized
             // (e.g. app not open). Keep the chain alive so the next run can sync.
             WorkManager.getInstance(applicationContext).enqueueUniqueWork(
-                WORK_NAME,
+                workName(instanceKey),
                 ExistingWorkPolicy.APPEND_OR_REPLACE,
-                buildRequest(currentIntervalMs),
+                buildRequest(currentIntervalMs, instanceKey),
             )
             return Result.success()
         }
@@ -52,36 +54,47 @@ internal class SyncWorker(
         // Self-schedule the next poll. APPEND_OR_REPLACE ensures the next run starts after the
         // current one finishes, even if the current run is still RUNNING.
         WorkManager.getInstance(applicationContext).enqueueUniqueWork(
-            WORK_NAME,
+            workName(instanceKey),
             ExistingWorkPolicy.APPEND_OR_REPLACE,
-            buildRequest(nextIntervalMs),
+            buildRequest(nextIntervalMs, instanceKey),
         )
 
         return Result.success()
     }
 
     companion object {
-        internal const val WORK_NAME = "task_sync_poll"
         internal const val KEY_INTERVAL_MS = "intervalMs"
+        internal const val KEY_INSTANCE_KEY = "instanceKey"
         private const val DEFAULT_INTERVAL_MS = 60_000L // 1 minute fallback when deps unavailable
 
-        internal fun buildRequest(initialDelayMs: Long) =
+        /** Unique WorkManager work name for [instanceKey] — one independent polling chain per
+         *  connected account instead of every account sharing a single chain. */
+        internal fun workName(instanceKey: String) = "task_sync_poll_$instanceKey"
+
+        internal fun buildRequest(initialDelayMs: Long, instanceKey: String) =
             OneTimeWorkRequestBuilder<SyncWorker>()
                 .setInitialDelay(initialDelayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-                .setInputData(workDataOf(KEY_INTERVAL_MS to initialDelayMs))
+                .setInputData(workDataOf(KEY_INTERVAL_MS to initialDelayMs, KEY_INSTANCE_KEY to instanceKey))
                 .build()
 
-        internal fun buildImmediateRequest(nextIntervalMs: Long) =
+        internal fun buildImmediateRequest(nextIntervalMs: Long, instanceKey: String) =
             OneTimeWorkRequestBuilder<SyncWorker>()
-                .setInputData(workDataOf(KEY_INTERVAL_MS to nextIntervalMs))
+                .setInputData(workDataOf(KEY_INTERVAL_MS to nextIntervalMs, KEY_INSTANCE_KEY to instanceKey))
                 .build()
     }
 }
 
-/** Holds the live dependencies for [SyncWorker]. Set once by the consuming store before any work requests are enqueued. */
+/**
+ * Holds the live dependencies for [SyncWorker], keyed by instance so multiple concurrently
+ * connected accounts don't overwrite each other's [Deps]. Set/cleared by each consuming store
+ * (keyed by its own database file name) before/after its work requests are enqueued.
+ */
 object SyncWorkerDependencies {
-    @Volatile
-    var current: Deps? = null
+    private val byInstanceKey = ConcurrentHashMap<String, Deps>()
+
+    fun put(instanceKey: String, deps: Deps) { byInstanceKey[instanceKey] = deps }
+    fun remove(instanceKey: String) { byInstanceKey.remove(instanceKey) }
+    operator fun get(instanceKey: String): Deps? = byInstanceKey[instanceKey]
 
     class Deps(
         val syncEngine: SyncEngine<*, *>,
