@@ -190,8 +190,16 @@ internal class FakeNetworkSource : NetworkSource<FakeContent, FakeListContent> {
     val recordsResponse: MutableMap<String, List<RemoteRecord<FakeContent>>> = mutableMapOf()
     val updatedMinCapture: MutableMap<String, Long?> = mutableMapOf()
     val failingListIds = mutableSetOf<String>()
+    /** [moveRecord] calls, in call order. */
+    val moveCalls: MutableList<MoveCall> = mutableListOf()
+    internal data class MoveCall(val source: String, val remoteId: String, val dest: String, val previous: String?)
+    /** Test hook invoked at the start of every [getLists] call — e.g. to detect/force overlap. */
+    var onGetLists: (suspend () -> Unit)? = null
 
-    override suspend fun getLists(): List<RemoteListRecord<FakeListContent>> = listsResponse
+    override suspend fun getLists(): List<RemoteListRecord<FakeListContent>> {
+        onGetLists?.invoke()
+        return listsResponse
+    }
 
     override suspend fun createList(content: FakeListContent): RemoteListRecord<FakeListContent> =
         RemoteListRecord(remoteId = "created-list-${content.title.take(8)}", content = content)
@@ -220,6 +228,10 @@ internal class FakeNetworkSource : NetworkSource<FakeContent, FakeListContent> {
     override suspend fun completeRecord(remoteListId: String, remoteId: String) = Unit
     override suspend fun uncompleteRecord(remoteListId: String, remoteId: String) = Unit
     override suspend fun deleteRecord(remoteListId: String, remoteId: String) = Unit
+
+    override suspend fun moveRecord(sourceRemoteListId: String, remoteId: String, destRemoteListId: String, previousRemoteId: String?) {
+        moveCalls += MoveCall(sourceRemoteListId, remoteId, destRemoteListId, previousRemoteId)
+    }
 }
 
 internal class FakeSyncErrorClassifier : SyncErrorClassifier {

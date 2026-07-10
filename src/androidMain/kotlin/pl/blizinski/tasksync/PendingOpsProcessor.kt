@@ -28,6 +28,11 @@ class PendingOpsProcessor<T, TList>(
 
         val errors = mutableListOf<SyncError>()
         val byEntity = ops.groupBy { it.entityLocalId } // getAll returns ASC by createdAt
+        // destination list localId -> remoteId of the last record moved into it so far this
+        // flush, so a batch of moves lands in the destination in the same relative order they
+        // were moved in (chained via NetworkSource.moveRecord's previousRemoteId) instead of
+        // each one landing at the top and reversing the batch.
+        val lastMovedRemoteIdByDestList = mutableMapOf<String, String>()
 
         for ((entityLocalId, entityOps) in byEntity) {
             val merged = merge(entityOps)
@@ -38,7 +43,7 @@ class PendingOpsProcessor<T, TList>(
                 else store.hardDeleteRecord(entityLocalId)
                 continue
             }
-            errors += flushEntityOps(entityLocalId, merged)
+            errors += flushEntityOps(entityLocalId, merged, lastMovedRemoteIdByDestList)
         }
 
         return errors
@@ -65,11 +70,18 @@ class PendingOpsProcessor<T, TList>(
 
         val hasCreate = ops.any { it.type == OpType.CREATE_RECORD }
         val hasDelete = ops.any { it.type == OpType.DELETE_RECORD }
+        val moves = ops.filter { it.type == OpType.MOVE_RECORD }
 
         if (hasCreate && hasDelete) return emptyList()
 
         val result = mutableListOf<PendingOp>()
-        if (hasCreate) result += ops.first { it.type == OpType.CREATE_RECORD }
+        if (hasCreate) {
+            // A record not yet created remotely can simply be created directly in its final
+            // destination — fold any pending moves' destination into the CREATE instead of
+            // emitting a separate MOVE (which would have nothing to move yet).
+            val createOp = ops.first { it.type == OpType.CREATE_RECORD }
+            result += if (moves.isEmpty()) createOp else createOp.copy(listLocalId = moves.last().listLocalId)
+        }
 
         if (hasDelete) {
             result += ops.last { it.type == OpType.DELETE_RECORD }
@@ -78,6 +90,11 @@ class PendingOpsProcessor<T, TList>(
 
         ops.lastOrNull { it.type == OpType.UPDATE_RECORD }?.let { result += it }
         ops.filter { it.type == OpType.COMPLETE_RECORD || it.type == OpType.UNCOMPLETE_RECORD }.forEach { result += it }
+        // Already-remote records: collapse a chain of moves (A->B->C) to a single A->C move,
+        // combining the earliest known source with the latest destination.
+        if (!hasCreate && moves.isNotEmpty()) {
+            result += moves.last().copy(contentJson = moves.first().contentJson)
+        }
 
         return result.sortedBy { it.createdAt }
     }
@@ -104,11 +121,15 @@ class PendingOpsProcessor<T, TList>(
     // Per-entity flush
     // -----------------------------------------------------------------------
 
-    private suspend fun flushEntityOps(entityLocalId: String, ops: List<PendingOp>): List<SyncError> {
+    private suspend fun flushEntityOps(
+        entityLocalId: String,
+        ops: List<PendingOp>,
+        lastMovedRemoteIdByDestList: MutableMap<String, String>,
+    ): List<SyncError> {
         val errors = mutableListOf<SyncError>()
 
         for (op in ops) {
-            val error = executeOp(op)
+            val error = executeOp(op, lastMovedRemoteIdByDestList)
             if (error != null) {
                 errors += error
                 store.recordPendingOpAttempt(op.id, OpStatus.FAILED)
@@ -123,7 +144,7 @@ class PendingOpsProcessor<T, TList>(
         return errors
     }
 
-    private suspend fun executeOp(op: PendingOp): SyncError? {
+    private suspend fun executeOp(op: PendingOp, lastMovedRemoteIdByDestList: MutableMap<String, String>): SyncError? {
         return try {
             when (op.type) {
                 OpType.CREATE_RECORD -> executeCreate(op)
@@ -131,6 +152,7 @@ class PendingOpsProcessor<T, TList>(
                 OpType.COMPLETE_RECORD -> executeComplete(op)
                 OpType.UNCOMPLETE_RECORD -> executeUncomplete(op)
                 OpType.DELETE_RECORD -> executeDelete(op)
+                OpType.MOVE_RECORD -> executeMove(op, lastMovedRemoteIdByDestList)
                 OpType.CREATE_LIST -> executeCreateList(op)
                 OpType.UPDATE_LIST -> executeUpdateList(op)
                 OpType.DELETE_LIST -> executeDeleteList(op)
@@ -201,6 +223,24 @@ class PendingOpsProcessor<T, TList>(
 
         network.deleteRecord(remoteListId, remoteId)
         store.hardDeleteRecord(op.entityLocalId)
+    }
+
+    /**
+     * [op.listLocalId] is the destination list (as for CREATE/UPDATE/COMPLETE); [op.contentJson]
+     * holds the source list's localId, captured at enqueue time — see [PendingOp]'s doc.
+     * [lastMovedRemoteIdByDestList] chains a batch of moves into destination order — see [flush].
+     */
+    private suspend fun executeMove(op: PendingOp, lastMovedRemoteIdByDestList: MutableMap<String, String>) {
+        val entity = store.getRecordByLocalId(op.entityLocalId) ?: return
+        val remoteId = entity.remoteId ?: return  // not yet created remotely; CREATE already targets the final list (see merge)
+        val sourceListLocalId = op.contentJson ?: return
+        val sourceRemoteListId = store.getListByLocalId(sourceListLocalId)?.remoteId ?: return
+        val destRemoteListId = store.getListByLocalId(op.listLocalId)?.remoteId ?: return
+        if (sourceRemoteListId == destRemoteListId) return  // already there (e.g. moved back and forth locally)
+
+        val previousRemoteId = lastMovedRemoteIdByDestList[op.listLocalId]
+        network.moveRecord(sourceRemoteListId, remoteId, destRemoteListId, previousRemoteId)
+        lastMovedRemoteIdByDestList[op.listLocalId] = remoteId
     }
 
     private suspend fun executeCreateList(op: PendingOp) {

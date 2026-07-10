@@ -1,6 +1,8 @@
 package pl.blizinski.tasksync
 
 import java.util.UUID
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Orchestrates a full sync cycle: flush pending ops then pull from the server.
@@ -23,6 +25,17 @@ import java.util.UUID
  *
  * Schema-agnostic: never inspects [T]/[TList] beyond structural equality (`!=`) to detect
  * whether server content changed — see the shared-task-sync-engine design doc.
+ *
+ * [writeMutex] serializes every [sync] call against every other — necessary because
+ * [AdaptivePoller.onLocalWrite] enqueues sync work with [androidx.work.ExistingWorkPolicy.REPLACE],
+ * which *requests* cancellation of an in-flight [SyncWorker] but doesn't force-stop it (the
+ * underlying blocking HTTP client doesn't observe coroutine cancellation mid-call), so two
+ * `sync()` calls can genuinely run concurrently when writes happen in quick succession (e.g. a
+ * bulk operation). Without this lock, two overlapping `flush()` calls can both read the same
+ * still-pending op before either removes it and push it to the server twice, or interleave with
+ * a local write's optimistic update and silently corrupt a not-yet-flushed op — callers that
+ * also mutate the local store directly (e.g. [pl.blizinski.googletasksstore.GoogleTasksStore]'s
+ * write methods) should acquire the same [writeMutex] before doing so, for the same reason.
  */
 class SyncEngine<T, TList>(
     private val store: LocalStore<T, TList>,
@@ -30,6 +43,7 @@ class SyncEngine<T, TList>(
     private val pendingOpsProcessor: PendingOpsProcessor<T, TList>,
     private val errorClassifier: SyncErrorClassifier,
 ) {
+    val writeMutex: Mutex = Mutex()
 
     data class SyncResult(
         val hasRemoteChanges: Boolean,
@@ -38,7 +52,9 @@ class SyncEngine<T, TList>(
         val consentIntent: Any? = null,
     )
 
-    suspend fun sync(): SyncResult {
+    suspend fun sync(): SyncResult = writeMutex.withLock { syncLocked() }
+
+    private suspend fun syncLocked(): SyncResult {
         // Snapshot pending entity IDs before flush so that records whose ops are successfully
         // pushed are still protected during the pull in this same cycle. Without this, a
         // record completed locally could be overwritten by stale server data if the server's

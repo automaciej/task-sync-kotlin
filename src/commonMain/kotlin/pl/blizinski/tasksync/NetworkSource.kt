@@ -24,4 +24,23 @@ interface NetworkSource<T, TList> {
      * update-with-side-parameter hack. */
     suspend fun uncompleteRecord(remoteListId: String, remoteId: String)
     suspend fun deleteRecord(remoteListId: String, remoteId: String)
+    /**
+     * Moves [remoteId] from [sourceRemoteListId] to [destRemoteListId] in place, preserving the
+     * record's identity. Defaults to unsupported — a source without a native cross-list move
+     * should simply never enqueue [OpType.MOVE_RECORD] (its caller falls back to
+     * create-in-new-list + delete-old-list instead), so this default is never reached in
+     * practice; it exists so implementations without a native move need no changes here.
+     *
+     * [previousRemoteId], if non-null, is the remoteId of the sibling the moved record should
+     * land immediately after in [destRemoteListId] — used by [PendingOpsProcessor] to chain a
+     * batch of moves into the destination in the same relative order they were moved in,
+     * instead of each one landing at the top and reversing the batch's order. Null means "no
+     * ordering constraint" (implementations may place it wherever their API defaults to).
+     */
+    suspend fun moveRecord(
+        sourceRemoteListId: String,
+        remoteId: String,
+        destRemoteListId: String,
+        previousRemoteId: String? = null,
+    ): Unit = throw UnsupportedOperationException("This source does not support moving records between lists")
 }

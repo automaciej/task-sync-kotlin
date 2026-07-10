@@ -16,6 +16,17 @@ class PendingOpsMergeTest {
         status = OpStatus.PENDING,
     )
 
+    /** [listLocalId] is the move's destination; [source] (contentJson) is where it moved from. */
+    private fun moveOp(createdAt: Long, listLocalId: String, source: String) = PendingOp(
+        id = "MOVE_RECORD-$createdAt",
+        type = OpType.MOVE_RECORD,
+        entityLocalId = "E1",
+        listLocalId = listLocalId,
+        contentJson = source,
+        createdAt = createdAt,
+        status = OpStatus.PENDING,
+    )
+
     private val processor = PendingOpsProcessor(
         FakeLocalStore(), FakeNetworkSource(), serializer<FakeContent>(), FakeSyncErrorClassifier(),
     )
@@ -61,6 +72,42 @@ class PendingOpsMergeTest {
         assertEquals(2, result.size)
         assertEquals(OpType.CREATE_RECORD, result[0].type)
         assertEquals(OpType.COMPLETE_RECORD, result[1].type)
+    }
+
+    @Test
+    fun createThenMoveFoldsDestinationIntoCreate() {
+        val result = processor.merge(listOf(op(OpType.CREATE_RECORD, 1), moveOp(2, listLocalId = "L2", source = "L1")))
+        assertEquals(1, result.size, "MOVE should fold into CREATE, not stand alone")
+        assertEquals(OpType.CREATE_RECORD, result.first().type)
+        assertEquals("L2", result.first().listLocalId, "CREATE should target the move's destination")
+    }
+
+    @Test
+    fun moveThenDeleteKeepsOnlyDelete() {
+        val result = processor.merge(listOf(moveOp(1, listLocalId = "L2", source = "L1"), op(OpType.DELETE_RECORD, 2)))
+        assertEquals(1, result.size)
+        assertEquals(OpType.DELETE_RECORD, result.first().type)
+    }
+
+    @Test
+    fun multipleMovesCollapseToSingleMoveFromEarliestSourceToLatestDestination() {
+        val ops = listOf(
+            moveOp(1, listLocalId = "L2", source = "L1"),
+            moveOp(2, listLocalId = "L3", source = "L2"),
+        )
+        val result = processor.merge(ops)
+        assertEquals(1, result.size)
+        assertEquals(OpType.MOVE_RECORD, result.first().type)
+        assertEquals("L3", result.first().listLocalId, "Destination should be the final one")
+        assertEquals("L1", result.first().contentJson, "Source should be the original, pre-chain list")
+    }
+
+    @Test
+    fun moveThenUpdateKeepsBoth() {
+        val result = processor.merge(listOf(moveOp(1, listLocalId = "L2", source = "L1"), op(OpType.UPDATE_RECORD, 2)))
+        assertEquals(2, result.size)
+        assertEquals(OpType.MOVE_RECORD, result[0].type)
+        assertEquals(OpType.UPDATE_RECORD, result[1].type)
     }
 
     @Test

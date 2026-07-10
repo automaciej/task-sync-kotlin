@@ -1,5 +1,7 @@
 package pl.blizinski.tasksync
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.serializer
 import kotlin.test.Test
@@ -370,5 +372,35 @@ class SyncEngineTest {
         assertNotNull(op, "CREATE op for reassigned record should still exist")
         assertEquals("L_default", op.listLocalId,
             "Pending op's listLocalId should be updated to the new list after reassignment")
+    }
+
+    // -----------------------------------------------------------------------
+    // Concurrency — writeMutex
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun sync_serializesConcurrentCalls() = runTest {
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+        store.lists["L1"] = localList("L1", remoteId = "RL1", lastSyncedAt = null)
+        network.listsResponse = listOf(remoteList("RL1"))
+        network.recordsResponse["RL1"] = emptyList()
+
+        var inFlight = 0
+        var maxInFlight = 0
+        network.onGetLists = {
+            inFlight++
+            maxInFlight = maxOf(maxInFlight, inFlight)
+            delay(50)
+            inFlight--
+        }
+
+        val syncEngine = engine(store, network)
+        val job1 = launch { syncEngine.sync() }
+        val job2 = launch { syncEngine.sync() }
+        job1.join()
+        job2.join()
+
+        assertEquals(1, maxInFlight, "Two concurrent sync() calls should never run their bodies at the same time")
     }
 }
