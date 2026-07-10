@@ -107,6 +107,9 @@ interface PendingOpsDao {
     """)
     suspend fun recordAttempt(id: String, status: OpStatus)
 
-    @Query("SELECT COUNT(*) FROM pending_ops")
-    fun observeCount(): Flow<Int>
+    @Query("SELECT COUNT(*) FROM pending_ops WHERE status = 'PENDING'")
+    fun observePendingCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM pending_ops WHERE status = 'FAILED'")
+    fun observeFailedCount(): Flow<Int>
 }

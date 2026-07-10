@@ -80,6 +80,7 @@ internal class FakeLocalStore : LocalStore<FakeContent, FakeListContent> {
     override fun records(listLocalId: String): Flow<List<SyncedRecord<FakeContent>>> = flowOf(emptyList())
     override fun lists(): Flow<List<SyncedListRecord<FakeListContent>>> = flowOf(emptyList())
     override fun pendingOpCount(): Flow<Int> = flowOf(0)
+    override fun failedOpCount(): Flow<Int> = flowOf(0)
 
     override suspend fun getRecordByLocalId(localId: String): SyncedRecord<FakeContent>? =
         records[localId]?.takeIf { !it.isDeleted }

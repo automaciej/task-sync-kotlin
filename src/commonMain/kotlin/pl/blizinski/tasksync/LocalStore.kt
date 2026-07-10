@@ -13,7 +13,13 @@ interface LocalStore<T, TList> {
     // --- Read streams ---
     fun records(listLocalId: String): Flow<List<SyncedRecord<T>>>
     fun lists(): Flow<List<SyncedListRecord<TList>>>
+    /** Count of ops still queued to be pushed ([OpStatus.PENDING] only — see [failedOpCount]). */
     fun pendingOpCount(): Flow<Int>
+
+    /** Count of ops that have failed at least once ([OpStatus.FAILED]) — still retried on every
+     *  sync cycle (unchanged behavior), but tracked separately so a permanently-failing op is
+     *  visibly distinguishable from one still in normal flight. */
+    fun failedOpCount(): Flow<Int>
 
     // --- Record queries ---
     suspend fun getRecordByLocalId(localId: String): SyncedRecord<T>?

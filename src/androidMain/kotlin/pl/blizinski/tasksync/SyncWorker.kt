@@ -44,6 +44,7 @@ internal class SyncWorker(
         }
 
         val syncResult = deps.syncEngine.sync()
+        deps.onSyncResult(syncResult)
         val nextIntervalMs = computeNextIntervalMs(
             currentMs = currentIntervalMs,
             hasChanges = syncResult.hasRemoteChanges,
@@ -99,6 +100,14 @@ object SyncWorkerDependencies {
     class Deps(
         val syncEngine: SyncEngine<*, *>,
         val config: SyncConfig,
+        /**
+         * Called with every [SyncEngine.sync] result this worker produces, in addition to the
+         * scheduling use `hasRemoteChanges` already gets in [SyncWorker.doWork] — lets the
+         * registering store apply the same status-update logic to background syncs that it
+         * already applies to its own foreground `forceSync()` calls. No-op by default so
+         * existing callers that don't need this aren't required to supply one.
+         */
+        val onSyncResult: (SyncEngine.SyncResult) -> Unit = {},
     )
 }
 

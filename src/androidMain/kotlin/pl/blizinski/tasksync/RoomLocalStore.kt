@@ -74,7 +74,9 @@ class RoomLocalStore<T, TList>(
     override fun lists(): Flow<List<SyncedListRecord<TList>>> =
         listsDao.observeAll().map { entities -> entities.map { it.toDomain() } }
 
-    override fun pendingOpCount(): Flow<Int> = pendingOpsDao.observeCount()
+    override fun pendingOpCount(): Flow<Int> = pendingOpsDao.observePendingCount()
+
+    override fun failedOpCount(): Flow<Int> = pendingOpsDao.observeFailedCount()
 
     override suspend fun getRecordByLocalId(localId: String): SyncedRecord<T>? =
         recordsDao.getByLocalId(localId)?.toDomain()

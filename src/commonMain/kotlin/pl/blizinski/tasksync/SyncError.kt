@@ -11,6 +11,21 @@ data class SyncError(
 )
 
 /**
+ * Folds one sync cycle's [new] errors into [previous]'s accumulated history: a clean cycle
+ * (empty [new]) clears the history (the problem it was tracking is presumably resolved),
+ * otherwise [new] errors are prepended and the result capped at [max] entries. Shared by every
+ * caller that turns a [SyncEngine.SyncResult] into a status update — both the foreground
+ * (`forceSync()`) and background ([SyncWorker]) sync paths in a consuming source library.
+ *
+ * Generic over the error element type rather than fixed to [SyncError]: a consuming source
+ * library (e.g. `google-tasks-kotlin`) accumulates its own already-mapped public `SyncError`
+ * type here, not this module's internal one — this function only needs list semantics, never
+ * inspects the element itself.
+ */
+fun <T> accumulateRecentErrors(previous: List<T>, new: List<T>, max: Int): List<T> =
+    if (new.isEmpty()) emptyList() else (new + previous).take(max)
+
+/**
  * Classifies exceptions thrown by a [NetworkSource] implementation. This is the one place
  * source-specific exception introspection (e.g. matching on Google's own exception types)
  * lives — [SyncEngine] only ever calls this interface, never inspects an exception itself.
