@@ -54,6 +54,26 @@ class SyncEngine<T, TList>(
 
     suspend fun sync(): SyncResult = writeMutex.withLock { syncLocked() }
 
+    /**
+     * Forces a full resync: every list is pulled from scratch (as if it were the first sync)
+     * instead of using its stored [SyncedListRecord.lastSyncedAt] for an incremental delta.
+     *
+     * Use this to reconcile local state that's drifted from the server in a way incremental
+     * sync can't catch — e.g. a record whose [SyncedRecord.listLocalId] was optimistically
+     * reassigned to a list that turned out not to exist (or belongs to a different account
+     * entirely), leaving it invisible under incremental sync because the server never saw a
+     * matching update to that record. [pull]'s full-pull path re-fetches every record on the
+     * record's real remote list regardless of modification time and matches it back up by
+     * [SyncedRecord.remoteId], so [pull]'s existing `listChanged` handling in `syncRecord`
+     * repairs the dangling `listLocalId` in place — no separate orphan-scan is needed.
+     */
+    suspend fun fullSync(): SyncResult = writeMutex.withLock {
+        for (list in store.getAllLists()) {
+            store.upsertList(list.copy(lastSyncedAt = null))
+        }
+        syncLocked()
+    }
+
     private suspend fun syncLocked(): SyncResult {
         // Snapshot pending entity IDs before flush so that records whose ops are successfully
         // pushed are still protected during the pull in this same cycle. Without this, a
