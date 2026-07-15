@@ -28,6 +28,8 @@ interface LocalStore<T, TList> {
 
     // --- Record mutations ---
     suspend fun upsertRecord(record: SyncedRecord<T>)
+    /** Batch variant of [upsertRecord], for inserting many new records (e.g. a first sync) in one write. */
+    suspend fun upsertRecords(records: List<SyncedRecord<T>>)
     suspend fun updateRecordRemoteId(localId: String, remoteId: String)
     suspend fun updateRecordSyncedState(
         localId: String,

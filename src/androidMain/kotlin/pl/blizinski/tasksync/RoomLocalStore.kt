@@ -90,6 +90,9 @@ class RoomLocalStore<T, TList>(
     override suspend fun upsertRecord(record: SyncedRecord<T>) =
         recordsDao.upsert(record.toEntity())
 
+    override suspend fun upsertRecords(records: List<SyncedRecord<T>>) =
+        recordsDao.upsertAll(records.map { it.toEntity() })
+
     override suspend fun updateRecordRemoteId(localId: String, remoteId: String) =
         recordsDao.updateRemoteId(localId, remoteId)
 

@@ -160,10 +160,17 @@ class SyncEngine<T, TList>(
                 continue
             }
 
+            val toInsert = mutableListOf<SyncedRecord<T>>()
             for (remoteRecord in remoteRecords) {
-                if (syncRecord(remoteRecord, localList.localId, pendingEntityIds, now)) {
+                if (syncRecord(remoteRecord, localList.localId, pendingEntityIds, now, toInsert)) {
                     hasRemoteChanges = true
                 }
+            }
+            // Batched so a first sync (every record is new) writes once instead of once per
+            // record — the per-record update/delete path above still applies individually.
+            if (toInsert.isNotEmpty()) {
+                store.upsertRecords(toInsert)
+                hasRemoteChanges = true
             }
 
             if (updatedMin == null) {
@@ -252,7 +259,9 @@ class SyncEngine<T, TList>(
      * Syncs a single remote record into the local store. Returns true if the local state changed.
      *
      * - If [RemoteRecord.isDeleted]: hard-delete the local entity (if any).
-     * - If no local entity exists: insert with a fresh localId.
+     * - If no local entity exists: append it to [pendingInserts] instead of writing immediately —
+     *   the caller batches these into one [LocalStore.upsertRecords] call per list (this is what
+     *   makes a first sync, where every record is new, one write instead of one per record).
      * - If the local entity has pending ops: skip (local wins).
      * - Otherwise: apply the remote state.
      */
@@ -261,6 +270,7 @@ class SyncEngine<T, TList>(
         listLocalId: String,
         pendingEntityIds: Set<String>,
         now: Long,
+        pendingInserts: MutableList<SyncedRecord<T>>,
     ): Boolean {
         if (remoteRecord.isDeleted) {
             val existing = store.getRecordByRemoteId(remoteRecord.remoteId) ?: return false
@@ -275,19 +285,17 @@ class SyncEngine<T, TList>(
         val existing = store.getRecordByRemoteId(remoteRecord.remoteId)
 
         return if (existing == null) {
-            store.upsertRecord(
-                SyncedRecord(
-                    localId = UUID.randomUUID().toString(),
-                    remoteId = remoteRecord.remoteId,
-                    listLocalId = listLocalId,
-                    content = remoteRecord.content,
-                    isCompleted = remoteRecord.isCompleted,
-                    lastSyncedAt = now,
-                    remoteUpdatedAt = remoteRecord.remoteUpdatedAt,
-                    lastSyncedContent = remoteRecord.content,
-                )
+            pendingInserts += SyncedRecord(
+                localId = UUID.randomUUID().toString(),
+                remoteId = remoteRecord.remoteId,
+                listLocalId = listLocalId,
+                content = remoteRecord.content,
+                isCompleted = remoteRecord.isCompleted,
+                lastSyncedAt = now,
+                remoteUpdatedAt = remoteRecord.remoteUpdatedAt,
+                lastSyncedContent = remoteRecord.content,
             )
-            true
+            false  // caller sets hasRemoteChanges once the batch insert runs
         } else if (existing.localId in pendingEntityIds) {
             false  // pending ops — local wins; skip
         } else {

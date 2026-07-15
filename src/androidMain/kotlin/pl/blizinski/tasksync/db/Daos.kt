@@ -25,6 +25,9 @@ interface SyncedRecordsDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(record: SyncedRecordEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(records: List<SyncedRecordEntity>)
+
     @Query("UPDATE synced_records SET remoteId = :remoteId WHERE localId = :localId")
     suspend fun updateRemoteId(localId: String, remoteId: String)
 

@@ -104,6 +104,10 @@ internal class FakeLocalStore : LocalStore<FakeContent, FakeListContent> {
         records[record.localId] = record
     }
 
+    override suspend fun upsertRecords(records: List<SyncedRecord<FakeContent>>) {
+        records.forEach { upsertRecord(it) }
+    }
+
     override suspend fun updateRecordRemoteId(localId: String, remoteId: String) {
         records[localId]?.let { records[localId] = it.copy(remoteId = remoteId) }
     }
