@@ -42,6 +42,13 @@ class SyncEngine<T, TList>(
     private val network: NetworkSource<T, TList>,
     private val pendingOpsProcessor: PendingOpsProcessor<T, TList>,
     private val errorClassifier: SyncErrorClassifier,
+    /**
+     * Checked at the start of every [sync]/[fullSync] call — lets a caller skip a doomed flush
+     * + pull cycle (and its confusing generic push/pull-failed error) when the device has no
+     * network, instead of waiting for the underlying HTTP client to time out or throw
+     * [java.io.IOException]. Defaults to always-true for callers/tests that don't care.
+     */
+    private val isOnline: () -> Boolean = { true },
 ) {
     val writeMutex: Mutex = Mutex()
 
@@ -52,7 +59,23 @@ class SyncEngine<T, TList>(
         val consentIntent: Any? = null,
     )
 
-    suspend fun sync(): SyncResult = writeMutex.withLock { syncLocked() }
+    private fun offlineResult() = SyncResult(
+        hasRemoteChanges = false,
+        errors = listOf(
+            SyncError(
+                occurredAt = System.currentTimeMillis(),
+                kind = SyncErrorKind.PULL_FAILED,
+                entityLocalId = null,
+                httpStatus = null,
+                message = "No network connection available",
+            )
+        ),
+    )
+
+    suspend fun sync(): SyncResult {
+        if (!isOnline()) return offlineResult()
+        return writeMutex.withLock { syncLocked() }
+    }
 
     /**
      * Forces a full resync: every list is pulled from scratch (as if it were the first sync)
@@ -67,11 +90,14 @@ class SyncEngine<T, TList>(
      * [SyncedRecord.remoteId], so [pull]'s existing `listChanged` handling in `syncRecord`
      * repairs the dangling `listLocalId` in place — no separate orphan-scan is needed.
      */
-    suspend fun fullSync(): SyncResult = writeMutex.withLock {
-        for (list in store.getAllLists()) {
-            store.upsertList(list.copy(lastSyncedAt = null))
+    suspend fun fullSync(): SyncResult {
+        if (!isOnline()) return offlineResult()
+        return writeMutex.withLock {
+            for (list in store.getAllLists()) {
+                store.upsertList(list.copy(lastSyncedAt = null))
+            }
+            syncLocked()
         }
-        syncLocked()
     }
 
     private suspend fun syncLocked(): SyncResult {

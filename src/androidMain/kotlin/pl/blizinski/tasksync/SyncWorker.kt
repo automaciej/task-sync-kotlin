@@ -1,8 +1,10 @@
 package pl.blizinski.tasksync
 
 import android.content.Context
+import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -72,15 +74,24 @@ internal class SyncWorker(
          *  connected account instead of every account sharing a single chain. */
         internal fun workName(instanceKey: String) = "task_sync_poll_$instanceKey"
 
+        // Requiring connectivity means an offline device's chain simply waits instead of running
+        // (and failing) every poll interval — WorkManager starts the work the moment a network
+        // becomes available, then the worker's own self-scheduling resumes as normal.
+        private val networkConstraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
         internal fun buildRequest(initialDelayMs: Long, instanceKey: String) =
             OneTimeWorkRequestBuilder<SyncWorker>()
                 .setInitialDelay(initialDelayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .setInputData(workDataOf(KEY_INTERVAL_MS to initialDelayMs, KEY_INSTANCE_KEY to instanceKey))
+                .setConstraints(networkConstraints)
                 .build()
 
         internal fun buildImmediateRequest(nextIntervalMs: Long, instanceKey: String) =
             OneTimeWorkRequestBuilder<SyncWorker>()
                 .setInputData(workDataOf(KEY_INTERVAL_MS to nextIntervalMs, KEY_INSTANCE_KEY to instanceKey))
+                .setConstraints(networkConstraints)
                 .build()
     }
 }
