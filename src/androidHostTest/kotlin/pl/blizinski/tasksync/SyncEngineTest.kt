@@ -7,6 +7,7 @@ import kotlinx.serialization.serializer
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -158,6 +159,37 @@ class SyncEngineTest {
 
         assertEquals(lastSynced - 60_000L, network.updatedMinCapture["RL1"],
             "updatedMin should be lastSyncedAt minus 60 seconds to close the race window")
+    }
+
+    @Test
+    fun pull_advancesLastSyncedAtForAllLists_inOneBatchedWrite() = runTest {
+        // Regression test for the recompute-storm finding in
+        // Docs/designs/2026-07-08-shared-task-sync-engine.md: the per-list lastSyncedAt bump
+        // used to be an unconditional store.upsertList() call per list, firing the lists table's
+        // InvalidationTracker once per list per pull cycle even when nothing observable changed.
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+
+        // Positions must match remoteLists' index order below — a position mismatch is a genuine
+        // content change that legitimately goes through syncList()'s own upsertList call, which
+        // is not what this test is about.
+        store.lists["L1"] = localList("L1", remoteId = "RL1", lastSyncedAt = T0).copy(position = 0)
+        store.lists["L2"] = localList("L2", remoteId = "RL2", lastSyncedAt = T0).copy(position = 1)
+        store.lists["L3"] = localList("L3", remoteId = "RL3", lastSyncedAt = T0).copy(position = 2)
+        network.listsResponse = listOf(remoteList("RL1"), remoteList("RL2"), remoteList("RL3"))
+        network.recordsResponse["RL1"] = emptyList()
+        network.recordsResponse["RL2"] = emptyList()
+        network.recordsResponse["RL3"] = emptyList()
+
+        engine(store, network).sync()
+
+        assertEquals(0, store.upsertListCallCount,
+            "Advancing lastSyncedAt should not go through the per-list upsertList path")
+        assertEquals(1, store.upsertListsCallCount,
+            "Advancing lastSyncedAt for all lists should be one batched write per pull cycle")
+        for (localId in listOf("L1", "L2", "L3")) {
+            assertNotEquals(T0, store.lists[localId]?.lastSyncedAt, "lastSyncedAt should still advance for $localId")
+        }
     }
 
     @Test

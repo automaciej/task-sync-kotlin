@@ -75,6 +75,9 @@ interface SyncedListsDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(list: SyncedListEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(lists: List<SyncedListEntity>)
+
     @Query("DELETE FROM synced_lists WHERE localId = :localId")
     suspend fun hardDelete(localId: String)
 }

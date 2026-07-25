@@ -76,6 +76,8 @@ internal class FakeLocalStore : LocalStore<FakeContent, FakeListContent> {
     val lists = mutableMapOf<String, SyncedListRecord<FakeListContent>>()  // key = localId
     val records = mutableMapOf<String, SyncedRecord<FakeContent>>()        // key = localId
     val pendingOps = mutableMapOf<String, PendingOp>()                     // key = op.id
+    var upsertListCallCount = 0
+    var upsertListsCallCount = 0
 
     override fun records(listLocalId: String): Flow<List<SyncedRecord<FakeContent>>> = flowOf(emptyList())
     override fun lists(): Flow<List<SyncedListRecord<FakeListContent>>> = flowOf(emptyList())
@@ -147,7 +149,13 @@ internal class FakeLocalStore : LocalStore<FakeContent, FakeListContent> {
     }
 
     override suspend fun upsertList(list: SyncedListRecord<FakeListContent>) {
+        upsertListCallCount++
         lists[list.localId] = list
+    }
+
+    override suspend fun upsertLists(lists: List<SyncedListRecord<FakeListContent>>) {
+        upsertListsCallCount++
+        lists.forEach { this.lists[it.localId] = it }
     }
 
     override suspend fun hardDeleteList(localId: String) {

@@ -133,6 +133,9 @@ class RoomLocalStore<T, TList>(
     override suspend fun upsertList(list: SyncedListRecord<TList>) =
         listsDao.upsert(list.toEntity())
 
+    override suspend fun upsertLists(lists: List<SyncedListRecord<TList>>) =
+        listsDao.upsertAll(lists.map { it.toEntity() })
+
     override suspend fun hardDeleteList(localId: String) {
         val remaining = recordsDao.getAllForList(localId)
         for (record in remaining) {

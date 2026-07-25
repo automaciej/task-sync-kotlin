@@ -50,6 +50,10 @@ interface LocalStore<T, TList> {
 
     // --- List mutations ---
     suspend fun upsertList(list: SyncedListRecord<TList>)
+    /** Batch variant of [upsertList] — one Room write (one InvalidationTracker fire) for all
+     *  lists instead of one per list. Use this for per-cycle bookkeeping writes (e.g. advancing
+     *  every list's `lastSyncedAt`) where per-list granularity isn't needed. */
+    suspend fun upsertLists(lists: List<SyncedListRecord<TList>>)
     /** Hard-deletes the list and every record still in it (and their pending ops). */
     suspend fun hardDeleteList(localId: String)
 

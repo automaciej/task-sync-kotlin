@@ -150,6 +150,13 @@ class SyncEngine<T, TList>(
         // deleted before we see it in the destination list (cross-list move).
         val fullPullRecordIds = mutableMapOf<String, Set<String>>() // listLocalId -> remoteIds
 
+        // lastSyncedAt advances for every list on every cycle regardless of content change (it's
+        // the incremental-pull high-water mark, not a content signal) — batched into one write
+        // after the loop instead of one per list, so one pull cycle fires the lists table's
+        // InvalidationTracker once instead of once per list (each spaced apart by that list's
+        // network round-trip).
+        val listsToAdvance = mutableListOf<SyncedListRecord<TList>>()
+
         for ((position, remoteList) in remoteLists.withIndex()) {
             if (syncList(remoteList, position, now)) hasRemoteChanges = true
 
@@ -204,8 +211,12 @@ class SyncEngine<T, TList>(
             }
             // Incremental: deletions signalled by remoteRecord.isDeleted, handled in syncRecord.
 
-            // Advance lastSyncedAt so the next poll uses updatedMin.
-            store.upsertList(localList.copy(lastSyncedAt = now))
+            // Advance lastSyncedAt so the next poll uses updatedMin — batched below.
+            listsToAdvance += localList.copy(lastSyncedAt = now)
+        }
+
+        if (listsToAdvance.isNotEmpty()) {
+            store.upsertLists(listsToAdvance)
         }
 
         // Deferred zombie detection for full-pulled lists. A record is only deleted if its
