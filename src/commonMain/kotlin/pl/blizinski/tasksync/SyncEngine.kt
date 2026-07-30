@@ -1,6 +1,9 @@
 package pl.blizinski.tasksync
 
-import java.util.UUID
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -37,6 +40,7 @@ import kotlinx.coroutines.sync.withLock
  * also mutate the local store directly (e.g. [pl.blizinski.googletasksstore.GoogleTasksStore]'s
  * write methods) should acquire the same [writeMutex] before doing so, for the same reason.
  */
+@OptIn(ExperimentalTime::class, ExperimentalUuidApi::class)
 class SyncEngine<T, TList>(
     private val store: LocalStore<T, TList>,
     private val network: NetworkSource<T, TList>,
@@ -63,7 +67,7 @@ class SyncEngine<T, TList>(
         hasRemoteChanges = false,
         errors = listOf(
             SyncError(
-                occurredAt = System.currentTimeMillis(),
+                occurredAt = Clock.System.now().toEpochMilliseconds(),
                 kind = SyncErrorKind.PULL_FAILED,
                 entityLocalId = null,
                 httpStatus = null,
@@ -118,7 +122,7 @@ class SyncEngine<T, TList>(
         } catch (e: Exception) {
             val consentIntent = errorClassifier.extractConsentIntent(e)
             val pullError = SyncError(
-                occurredAt = System.currentTimeMillis(),
+                occurredAt = Clock.System.now().toEpochMilliseconds(),
                 kind = if (consentIntent != null) SyncErrorKind.CONSENT_REQUIRED else (errorClassifier.classifySpecial(e) ?: SyncErrorKind.PULL_FAILED),
                 entityLocalId = null,
                 httpStatus = errorClassifier.httpStatus(e),
@@ -141,7 +145,7 @@ class SyncEngine<T, TList>(
     private suspend fun pull(pendingEntityIds: Set<String>): PullResult {
         var hasRemoteChanges = false
         val errors = mutableListOf<SyncError>()
-        val now = System.currentTimeMillis()
+        val now = Clock.System.now().toEpochMilliseconds()
 
         val remoteLists = network.getLists()
 
@@ -276,7 +280,7 @@ class SyncEngine<T, TList>(
         return if (existing == null) {
             store.upsertList(
                 SyncedListRecord(
-                    localId = UUID.randomUUID().toString(),
+                    localId = Uuid.random().toString(),
                     remoteId = remoteList.remoteId,
                     content = remoteList.content,
                     lastSyncedAt = null, // null -> full record pull on the first sync cycle
@@ -323,7 +327,7 @@ class SyncEngine<T, TList>(
 
         return if (existing == null) {
             pendingInserts += SyncedRecord(
-                localId = UUID.randomUUID().toString(),
+                localId = Uuid.random().toString(),
                 remoteId = remoteRecord.remoteId,
                 listLocalId = listLocalId,
                 content = remoteRecord.content,

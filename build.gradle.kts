@@ -1,3 +1,4 @@
+import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -24,6 +25,14 @@ kotlin {
         withHostTestBuilder {}.configure {
             isReturnDefaultValues = true
         }
+    }
+
+    // wasmJs proof-of-concept target — see TaskCompass's
+    // Docs/designs/2026-07-30-web-wasmjs-google-tasks-poc.md. Additive only: does not touch
+    // the android {} block above.
+    @OptIn(ExperimentalWasmDsl::class)
+    wasmJs {
+        browser()
     }
 
     sourceSets {

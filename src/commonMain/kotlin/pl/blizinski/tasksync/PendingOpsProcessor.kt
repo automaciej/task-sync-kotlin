@@ -1,5 +1,7 @@
 package pl.blizinski.tasksync
 
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 
@@ -14,6 +16,7 @@ import kotlinx.serialization.json.Json
  *
  * Returns a list of [SyncError]s for any ops that failed.
  */
+@OptIn(ExperimentalTime::class)
 class PendingOpsProcessor<T, TList>(
     private val store: LocalStore<T, TList>,
     private val network: NetworkSource<T, TList>,
@@ -160,7 +163,7 @@ class PendingOpsProcessor<T, TList>(
             null
         } catch (e: Exception) {
             SyncError(
-                occurredAt = System.currentTimeMillis(),
+                occurredAt = Clock.System.now().toEpochMilliseconds(),
                 kind = errorClassifier.classifySpecial(e) ?: SyncErrorKind.PUSH_FAILED,
                 entityLocalId = op.entityLocalId,
                 httpStatus = errorClassifier.httpStatus(e),
