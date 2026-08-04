@@ -232,7 +232,7 @@ class IndexedDbLocalStore<T, TList>(
 
     override suspend fun getAllRecordsForList(listLocalId: String): List<SyncedRecord<T>> {
         ensureLoaded()
-        return recordsByLocalId.value.values.filter { it.listLocalId == listLocalId }
+        return recordsByLocalId.value.values.filter { it.listLocalId == listLocalId && !it.isDeleted }
     }
 
     // -----------------------------------------------------------------------
