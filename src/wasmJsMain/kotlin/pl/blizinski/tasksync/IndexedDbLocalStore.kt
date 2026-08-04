@@ -196,7 +196,9 @@ class IndexedDbLocalStore<T, TList>(
 
     override fun records(listLocalId: String): Flow<List<SyncedRecord<T>>> = flow {
         ensureLoaded()
-        emitAll(recordsByLocalId.map { records -> records.values.filter { it.listLocalId == listLocalId } })
+        emitAll(recordsByLocalId.map { records ->
+            records.values.filter { it.listLocalId == listLocalId && !it.isDeleted }
+        })
     }
 
     override fun lists(): Flow<List<SyncedListRecord<TList>>> = flow {
