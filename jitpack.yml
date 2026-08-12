@@ -1,2 +1,7 @@
 jdk:
   - openjdk21
+# -PjitpackBuild=true disables the wasmJs proof-of-concept target for this build — see the
+# comment in build.gradle.kts for why (publishing more than one target breaks JitPack's Gradle
+# module metadata for downstream KMP consumers).
+install:
+  - ./gradlew clean assemble publishToMavenLocal -PjitpackBuild=true -Pgroup=com.github.automaciej -Pversion=$VERSION
