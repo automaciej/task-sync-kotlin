@@ -8,7 +8,22 @@ import kotlinx.serialization.Serializable
  * need anything beyond structural equality on these, unlike google-tasks-kotlin's real
  * Google-Tasks-shaped Task/TaskList. */
 @Serializable
-internal data class FakeContent(val title: String)
+internal data class FakeContent(val title: String, val notes: String? = null)
+
+/**
+ * Field-wise three-way [pl.blizinski.tasksync.store.ContentMerger] for [FakeContent]: takes each
+ * field from whichever side changed it since [base]; on a field both sides changed, `preferLocal`
+ * decides. Mirrors what a real provider merger does.
+ */
+internal val fakeContentMerger = pl.blizinski.tasksync.store.ContentMerger<FakeContent> { base, local, remote, preferLocal ->
+    if (base == null) return@ContentMerger local
+    fun <F> pick(f: (FakeContent) -> F): F = when {
+        f(local) == f(base) -> f(remote)   // local untouched -> take server's
+        f(remote) == f(base) -> f(local)   // server untouched -> keep local
+        else -> if (preferLocal) f(local) else f(remote)
+    }
+    FakeContent(title = pick { it.title }, notes = pick { it.notes })
+}
 
 @Serializable
 internal data class FakeListContent(val title: String)
@@ -19,13 +34,16 @@ internal fun remoteList(id: String, title: String = "List $id") =
 internal fun remoteRecord(
     id: String,
     title: String = "Task $id",
+    notes: String? = null,
     isCompleted: Boolean = false,
     isDeleted: Boolean = false,
+    remoteUpdatedAt: Long? = null,
 ) = RemoteRecord(
     remoteId = id,
-    content = FakeContent(title),
+    content = FakeContent(title, notes),
     isCompleted = isCompleted,
     isDeleted = isDeleted,
+    remoteUpdatedAt = remoteUpdatedAt,
 )
 
 internal fun localList(
@@ -46,13 +64,18 @@ internal fun localRecord(
     listLocalId: String,
     remoteId: String? = null,
     title: String = "Task $localId",
+    notes: String? = null,
     isCompleted: Boolean = false,
+    lastSyncedContent: FakeContent? = null,
+    remoteUpdatedAt: Long? = null,
 ) = SyncedRecord(
     localId = localId,
     remoteId = remoteId,
     listLocalId = listLocalId,
-    content = FakeContent(title),
+    content = FakeContent(title, notes),
     isCompleted = isCompleted,
+    lastSyncedContent = lastSyncedContent,
+    remoteUpdatedAt = remoteUpdatedAt,
 )
 
 internal fun pendingOp(
@@ -60,12 +83,13 @@ internal fun pendingOp(
     entityLocalId: String,
     listLocalId: String,
     type: OpType = OpType.UPDATE_RECORD,
+    createdAt: Long = 0L,
 ) = PendingOp(
     id = id,
     type = type,
     entityLocalId = entityLocalId,
     listLocalId = listLocalId,
-    createdAt = 0L,
+    createdAt = createdAt,
 )
 
 /**
@@ -203,6 +227,9 @@ internal class FakeNetworkSource : NetworkSource<FakeContent, FakeListContent> {
     val recordsResponse: MutableMap<String, List<RemoteRecord<FakeContent>>> = mutableMapOf()
     val updatedMinCapture: MutableMap<String, Long?> = mutableMapOf()
     val failingListIds = mutableSetOf<String>()
+    /** [updateRecord] calls, in call order. */
+    val updateCalls: MutableList<UpdateCall> = mutableListOf()
+    internal data class UpdateCall(val remoteListId: String, val remoteId: String, val content: FakeContent)
     /** [moveRecord] calls, in call order. */
     val moveCalls: MutableList<MoveCall> = mutableListOf()
     internal data class MoveCall(val source: String, val remoteId: String, val dest: String, val previous: String?)
@@ -236,6 +263,7 @@ internal class FakeNetworkSource : NetworkSource<FakeContent, FakeListContent> {
         if (remoteListId in failingListIds) {
             throw IllegalStateException("404 Not Found: list $remoteListId does not exist")
         }
+        updateCalls += UpdateCall(remoteListId, remoteId, content)
     }
 
     override suspend fun completeRecord(remoteListId: String, remoteId: String) = Unit

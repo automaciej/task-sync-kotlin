@@ -39,16 +39,21 @@ fun <T, TList> buildAndroidTaskStore(
     listSerializer: KSerializer<TList>,
     adapter: ContentAdapter<T, TList>,
     migrations: List<Migration> = emptyList(),
+    merger: ContentMerger<T>? = null,
 ): TaskStore {
     val appContext = context.applicationContext
     val db = Room.databaseBuilder(appContext, TaskSyncDatabase::class.java, config.dbName)
         .apply { if (migrations.isNotEmpty()) addMigrations(*migrations.toTypedArray()) }
         .build()
     val localStore = RoomLocalStore(db.recordsDao(), db.listsDao(), db.pendingOpsDao(), recordSerializer, listSerializer)
-    val pendingOpsProcessor = PendingOpsProcessor(localStore, network, recordSerializer, errorClassifier)
+    val pendingOpsProcessor = PendingOpsProcessor(
+        localStore, network, recordSerializer, errorClassifier,
+        pushLatestEntityContent = merger != null,
+    )
     val syncEngine = SyncEngine(
         localStore, network, pendingOpsProcessor, errorClassifier,
         isOnline = { isNetworkAvailable(appContext) },
+        merger = merger,
     )
     val syncConfig = SyncConfig(config.minPollInterval, config.maxPollInterval)
     val workManager = WorkManager.getInstance(appContext)

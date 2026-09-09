@@ -22,6 +22,15 @@ class PendingOpsProcessor<T, TList>(
     private val network: NetworkSource<T, TList>,
     private val recordSerializer: KSerializer<T>,
     private val errorClassifier: SyncErrorClassifier,
+    /**
+     * When true, [executeUpdate] pushes the record's *current* local content instead of the
+     * snapshot captured when the UPDATE op was enqueued. Set by [buildAndroidTaskStore] /
+     * [buildWasmTaskStore] whenever a [pl.blizinski.tasksync.store.ContentMerger] is
+     * configured: the pull step (which then runs before flush) has already folded any
+     * concurrent server edit into that current content, and this is what carries the merge
+     * result to the server. Inert — and byte-identical to the historical path — when false.
+     */
+    private val pushLatestEntityContent: Boolean = false,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -192,7 +201,8 @@ class PendingOpsProcessor<T, TList>(
         val listEntity = store.getListByLocalId(op.listLocalId) ?: return
         val remoteListId = listEntity.remoteId ?: return
 
-        network.updateRecord(remoteListId, remoteId, decodeContent(op))
+        val content = if (pushLatestEntityContent) entity.content else decodeContent(op)
+        network.updateRecord(remoteListId, remoteId, content)
     }
 
     private suspend fun executeComplete(op: PendingOp) {

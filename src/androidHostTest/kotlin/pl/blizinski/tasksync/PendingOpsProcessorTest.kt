@@ -53,6 +53,31 @@ class PendingOpsProcessorTest {
 
         assertTrue(errors.isEmpty())
         assertTrue(store.pendingOps.isEmpty())
+        assertEquals(FakeContent("New Title"), network.updateCalls.single().content,
+            "Default: pushes the content captured in the op")
+    }
+
+    @Test
+    fun updateRecordWithPushLatestEntityContent_pushesCurrentEntityContentNotOpSnapshot() = runTest {
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+        store.lists["L1"] = localList("L1", remoteId = "RL1")
+        // Entity content has moved on since the op was enqueued (e.g. a pull-time three-way merge).
+        store.records["T1"] = localRecord("T1", "L1", remoteId = "RT1", title = "Merged Title", notes = "merged notes")
+        store.pendingOps["op1"] = PendingOp(
+            id = "op1", type = OpType.UPDATE_RECORD, entityLocalId = "T1", listLocalId = "L1",
+            contentJson = contentJson("Stale Title"), createdAt = 0L,
+        )
+
+        val processor = PendingOpsProcessor(
+            store, network, serializer<FakeContent>(), FakeSyncErrorClassifier(),
+            pushLatestEntityContent = true,
+        )
+        val errors = processor.flush()
+
+        assertTrue(errors.isEmpty())
+        assertEquals(FakeContent("Merged Title", "merged notes"), network.updateCalls.single().content,
+            "With pushLatestEntityContent, flush pushes the record's current content")
     }
 
     @Test

@@ -22,10 +22,14 @@ fun <T, TList> buildWasmTaskStore(
     recordSerializer: KSerializer<T>,
     listSerializer: KSerializer<TList>,
     adapter: ContentAdapter<T, TList>,
+    merger: ContentMerger<T>? = null,
 ): TaskStore {
     val localStore = IndexedDbLocalStore(config.dbName, recordSerializer, listSerializer)
-    val pendingOpsProcessor = PendingOpsProcessor(localStore, network, recordSerializer, errorClassifier)
-    val syncEngine = SyncEngine(localStore, network, pendingOpsProcessor, errorClassifier)
+    val pendingOpsProcessor = PendingOpsProcessor(
+        localStore, network, recordSerializer, errorClassifier,
+        pushLatestEntityContent = merger != null,
+    )
+    val syncEngine = SyncEngine(localStore, network, pendingOpsProcessor, errorClassifier, merger = merger)
 
     return DefaultTaskStore(
         store = localStore,

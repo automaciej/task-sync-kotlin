@@ -16,10 +16,17 @@ class SyncEngineTest {
 
     private val T0 = 1_000_000L  // arbitrary base epoch ms
 
-    private fun engine(store: FakeLocalStore, network: FakeNetworkSource): SyncEngine<FakeContent, FakeListContent> {
+    private fun engine(
+        store: FakeLocalStore,
+        network: FakeNetworkSource,
+        merger: pl.blizinski.tasksync.store.ContentMerger<FakeContent>? = null,
+    ): SyncEngine<FakeContent, FakeListContent> {
         val errorClassifier = FakeSyncErrorClassifier()
-        val pendingOps = PendingOpsProcessor(store, network, serializer<FakeContent>(), errorClassifier)
-        return SyncEngine(store, network, pendingOps, errorClassifier)
+        val pendingOps = PendingOpsProcessor(
+            store, network, serializer<FakeContent>(), errorClassifier,
+            pushLatestEntityContent = merger != null,
+        )
+        return SyncEngine(store, network, pendingOps, errorClassifier, merger = merger)
     }
 
     // -----------------------------------------------------------------------
@@ -404,6 +411,87 @@ class SyncEngineTest {
         assertNotNull(op, "CREATE op for reassigned record should still exist")
         assertEquals("L_default", op.listLocalId,
             "Pending op's listLocalId should be updated to the new list after reassignment")
+    }
+
+    // -----------------------------------------------------------------------
+    // Three-way merge (ContentMerger)
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun pendingRecord_withMerger_foldsNonConflictingRemoteFieldAndPushesMergedContent() = runTest {
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+
+        val base = FakeContent("Orig title", "orig notes")
+        store.lists["L1"] = localList("L1", remoteId = "RL1", lastSyncedAt = T0)
+        // Local edited the title; notes still at base.
+        store.records["T1"] = localRecord(
+            "T1", "L1", remoteId = "RT1",
+            title = "Local title", notes = "orig notes", lastSyncedContent = base,
+        )
+        store.pendingOps["op1"] = pendingOp("op1", "T1", "L1", OpType.UPDATE_RECORD, createdAt = T0 + 100)
+        network.listsResponse = listOf(remoteList("RL1"))
+        // Server edited the notes; title still at base.
+        network.recordsResponse["RL1"] = listOf(
+            remoteRecord("RT1", title = "Orig title", notes = "remote notes", remoteUpdatedAt = T0 + 50),
+        )
+
+        engine(store, network, fakeContentMerger).sync()
+
+        val merged = store.records["T1"]!!
+        assertEquals(FakeContent("Local title", "remote notes"), merged.content,
+            "Local title and remote notes should both survive a three-way merge")
+        assertEquals(FakeContent("Orig title", "remote notes"), merged.lastSyncedContent,
+            "Merge base should advance to the just-pulled remote content")
+        assertEquals(FakeContent("Local title", "remote notes"), network.updateCalls.single().content,
+            "Flush should push the merged content, not the stale enqueue-time snapshot")
+    }
+
+    @Test
+    fun pendingRecord_withMerger_trueConflictResolvesByLastWriterWins() = runTest {
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+
+        val base = FakeContent("Orig", "orig notes")
+        store.lists["L1"] = localList("L1", remoteId = "RL1", lastSyncedAt = T0)
+        store.records["T1"] = localRecord(
+            "T1", "L1", remoteId = "RT1",
+            title = "Local title", notes = "orig notes", lastSyncedContent = base,
+        )
+        // Local edit is older than the server's update -> server wins the conflicting field.
+        store.pendingOps["op1"] = pendingOp("op1", "T1", "L1", OpType.UPDATE_RECORD, createdAt = T0 + 10)
+        network.listsResponse = listOf(remoteList("RL1"))
+        network.recordsResponse["RL1"] = listOf(
+            remoteRecord("RT1", title = "Remote title", notes = "orig notes", remoteUpdatedAt = T0 + 999),
+        )
+
+        engine(store, network, fakeContentMerger).sync()
+
+        assertEquals("Remote title", store.records["T1"]!!.content.title,
+            "On a field both sides changed, the later writer (server here) wins")
+    }
+
+    @Test
+    fun pendingRecord_withoutMerger_ignoresConcurrentRemoteContentChange() = runTest {
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+
+        val base = FakeContent("Base", "base notes")
+        store.lists["L1"] = localList("L1", remoteId = "RL1", lastSyncedAt = T0)
+        store.records["T1"] = localRecord(
+            "T1", "L1", remoteId = "RT1",
+            title = "Local", notes = "base notes", lastSyncedContent = base,
+        )
+        store.pendingOps["op1"] = pendingOp("op1", "T1", "L1", OpType.UPDATE_RECORD)
+        network.listsResponse = listOf(remoteList("RL1"))
+        network.recordsResponse["RL1"] = listOf(remoteRecord("RT1", title = "Base", notes = "remote notes"))
+
+        engine(store, network).sync() // no merger
+
+        assertEquals(FakeContent("Local", "base notes"), store.records["T1"]!!.content,
+            "Without a merger a pending record wins wholesale — no field-level merge")
+        assertEquals(base, store.records["T1"]!!.lastSyncedContent,
+            "Without a merger the merge base is left untouched")
     }
 
     // -----------------------------------------------------------------------

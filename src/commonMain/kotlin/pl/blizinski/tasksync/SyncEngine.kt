@@ -6,6 +6,7 @@ import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import pl.blizinski.tasksync.store.ContentMerger
 
 /**
  * Orchestrates a full sync cycle: flush pending ops then pull from the server.
@@ -53,6 +54,14 @@ class SyncEngine<T, TList>(
      * [java.io.IOException]. Defaults to always-true for callers/tests that don't care.
      */
     private val isOnline: () -> Boolean = { true },
+    /**
+     * Optional provider-supplied three-way merge. When null (the default), a record with
+     * pending local ops wins wholesale over any concurrent remote change (historical
+     * behavior). When supplied, [pull] runs before [PendingOpsProcessor.flush] each cycle and
+     * folds the server's non-conflicting field changes into such a record before its ops are
+     * pushed — see [mergePendingRecord].
+     */
+    private val merger: ContentMerger<T>? = null,
 ) {
     val writeMutex: Mutex = Mutex()
 
@@ -105,31 +114,43 @@ class SyncEngine<T, TList>(
     }
 
     private suspend fun syncLocked(): SyncResult {
-        // Snapshot pending entity IDs before flush so that records whose ops are successfully
-        // pushed are still protected during the pull in this same cycle. Without this, a
-        // record completed locally could be overwritten by stale server data if the server's
-        // read replicas haven't caught up yet.
+        // Snapshot pending entity IDs up front: everything queued now is protected from being
+        // overwritten by this cycle's pull (local wins, or — with a [merger] — a three-way
+        // merge that still preserves the local edit).
         val pendingEntityIds = store.getAllPendingOps().map { it.entityLocalId }.toSet()
+
+        // Pull before flush. A local UPDATE pushed to the server overwrites whatever is there;
+        // pulling first lets [mergePendingRecord] fold the server's concurrent changes into the
+        // local record (and the content its pending ops will push) *before* that push happens,
+        // instead of losing them. With no [merger] this ordering is inert — the pull skips
+        // pending records either way. Flush still runs when the pull fails (offline-tolerant).
+        var pullChanges = false
+        var pullConsentIntent: Any? = null
+        val pullErrors: List<SyncError> = try {
+            val pullResult = pull(pendingEntityIds)
+            pullChanges = pullResult.hasRemoteChanges
+            pullConsentIntent = pullResult.consentIntent
+            pullResult.errors
+        } catch (e: Exception) {
+            pullConsentIntent = errorClassifier.extractConsentIntent(e)
+            listOf(
+                SyncError(
+                    occurredAt = Clock.System.now().toEpochMilliseconds(),
+                    kind = if (pullConsentIntent != null) SyncErrorKind.CONSENT_REQUIRED else (errorClassifier.classifySpecial(e) ?: SyncErrorKind.PULL_FAILED),
+                    entityLocalId = null,
+                    httpStatus = errorClassifier.httpStatus(e),
+                    message = e.message ?: "Unknown error during pull",
+                )
+            )
+        }
+
         val pushErrors = pendingOpsProcessor.flush()
 
-        return try {
-            val pullResult = pull(pendingEntityIds)
-            SyncResult(
-                hasRemoteChanges = pullResult.hasRemoteChanges,
-                errors = pushErrors + pullResult.errors,
-                consentIntent = pullResult.consentIntent,
-            )
-        } catch (e: Exception) {
-            val consentIntent = errorClassifier.extractConsentIntent(e)
-            val pullError = SyncError(
-                occurredAt = Clock.System.now().toEpochMilliseconds(),
-                kind = if (consentIntent != null) SyncErrorKind.CONSENT_REQUIRED else (errorClassifier.classifySpecial(e) ?: SyncErrorKind.PULL_FAILED),
-                entityLocalId = null,
-                httpStatus = errorClassifier.httpStatus(e),
-                message = e.message ?: "Unknown error during pull",
-            )
-            SyncResult(hasRemoteChanges = false, errors = pushErrors + pullError, consentIntent = consentIntent)
-        }
+        return SyncResult(
+            hasRemoteChanges = pullChanges,
+            errors = pullErrors + pushErrors,
+            consentIntent = pullConsentIntent,
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -338,7 +359,7 @@ class SyncEngine<T, TList>(
             )
             false  // caller sets hasRemoteChanges once the batch insert runs
         } else if (existing.localId in pendingEntityIds) {
-            false  // pending ops — local wins; skip
+            mergePendingRecord(existing, remoteRecord)
         } else {
             val changed = existing.content != remoteRecord.content || existing.isCompleted != remoteRecord.isCompleted
             val listChanged = existing.listLocalId != listLocalId
@@ -357,5 +378,39 @@ class SyncEngine<T, TList>(
             }
             changed || listChanged
         }
+    }
+
+    /**
+     * A record with queued local ops came back changed from the server. Without a [merger] the
+     * local copy wins wholesale (historical behavior — returns false, writes nothing). With one,
+     * three-way merge the server's field changes into the local content and advance the merge
+     * base, so the pending ops push the merged result on this same cycle's flush rather than
+     * clobbering the server's copy.
+     *
+     * The generic completion flag ([SyncedRecord.isCompleted]) is deliberately left to "local
+     * wins" here — only opaque content [T] is merged.
+     */
+    private suspend fun mergePendingRecord(
+        existing: SyncedRecord<T>,
+        remoteRecord: RemoteRecord<T>,
+    ): Boolean {
+        val merger = merger ?: return false
+        val base = existing.lastSyncedContent ?: return false   // no merge base — local wins
+        if (remoteRecord.content == base) return false           // server unchanged since base
+        val entityOps = store.getPendingOpsForEntity(existing.localId)
+        if (entityOps.any { it.type == OpType.DELETE_RECORD }) return false  // local delete wins
+
+        val localEditedAt = entityOps.maxOfOrNull { it.createdAt } ?: Long.MIN_VALUE
+        val preferLocal = localEditedAt >= (remoteRecord.remoteUpdatedAt ?: Long.MIN_VALUE)
+        val merged = merger.merge(base, existing.content, remoteRecord.content, preferLocal)
+
+        store.upsertRecord(
+            existing.copy(
+                content = merged,
+                remoteUpdatedAt = remoteRecord.remoteUpdatedAt,
+                lastSyncedContent = remoteRecord.content,
+            )
+        )
+        return merged != existing.content
     }
 }

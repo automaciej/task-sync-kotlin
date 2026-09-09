@@ -57,8 +57,14 @@ No change to this library required.
   hard-deleted locally when its remote counterpart genuinely disappears, but
   not when it merely moved lists or its API omits completed items from a full
   listing.
-- **Three-way conflict awareness** via `SyncedRecord.lastSyncedContent` (a
-  merge-base snapshot).
+- **Three-way merge** via an optional provider-supplied `ContentMerger<T>`
+  (passed to `buildAndroidTaskStore` / `buildWasmTaskStore`). When configured,
+  a sync cycle pulls before it flushes and folds the server's non-conflicting
+  field changes into a record that still has unpushed local edits — using
+  `SyncedRecord.lastSyncedContent` as the merge base — so e.g. a title edited
+  on one device and notes edited on another both survive. Fields changed on
+  both sides are resolved last-writer-wins. With no merger supplied, a record
+  with pending local ops wins wholesale (unchanged historical behavior).
 - **Adaptive background polling** (`AdaptivePoller` + `SyncWorker` /
   `androidx.work`), with an `instanceKey` per connected account so multiple
   concurrently-connected accounts run independent, non-interfering polling
