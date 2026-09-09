@@ -3,6 +3,7 @@ package pl.blizinski.tasksync
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.serialization.Serializable
+import pl.blizinski.tasksync.store.contentMerger
 
 /** Fake, deliberately minimal content types — proves SyncEngine/PendingOpsProcessor never
  * need anything beyond structural equality on these, unlike google-tasks-kotlin's real
@@ -11,18 +12,12 @@ import kotlinx.serialization.Serializable
 internal data class FakeContent(val title: String, val notes: String? = null)
 
 /**
- * Field-wise three-way [pl.blizinski.tasksync.store.ContentMerger] for [FakeContent]: takes each
- * field from whichever side changed it since [base]; on a field both sides changed, `preferLocal`
- * decides. Mirrors what a real provider merger does.
+ * Field-wise three-way merger for [FakeContent], built with the shared [contentMerger] helper —
+ * the same way a real provider merger is written. Exercises [MergeScope.pick] and the empty-base
+ * stand-in through [pl.blizinski.tasksync.SyncEngineTest].
  */
-internal val fakeContentMerger = pl.blizinski.tasksync.store.ContentMerger<FakeContent> { base, local, remote, preferLocal ->
-    if (base == null) return@ContentMerger local
-    fun <F> pick(f: (FakeContent) -> F): F = when {
-        f(local) == f(base) -> f(remote)   // local untouched -> take server's
-        f(remote) == f(base) -> f(local)   // server untouched -> keep local
-        else -> if (preferLocal) f(local) else f(remote)
-    }
-    FakeContent(title = pick { it.title }, notes = pick { it.notes })
+internal val fakeContentMerger = contentMerger(emptyBase = FakeContent(title = "")) {
+    remote.copy(title = pick { it.title }, notes = pick { it.notes })
 }
 
 @Serializable

@@ -387,6 +387,11 @@ class SyncEngine<T, TList>(
      * base, so the pending ops push the merged result on this same cycle's flush rather than
      * clobbering the server's copy.
      *
+     * [SyncedRecord.lastSyncedContent] (the merge base) is null for a record created locally and
+     * not yet pulled back. That case is still handed to the [merger] — with a null base it can
+     * still fill fields the local copy never set from [remoteRecord], rather than dropping them —
+     * and this pull advances the base so later cycles take the fast path below.
+     *
      * The generic completion flag ([SyncedRecord.isCompleted]) is deliberately left to "local
      * wins" here — only opaque content [T] is merged.
      */
@@ -395,8 +400,8 @@ class SyncEngine<T, TList>(
         remoteRecord: RemoteRecord<T>,
     ): Boolean {
         val merger = merger ?: return false
-        val base = existing.lastSyncedContent ?: return false   // no merge base — local wins
-        if (remoteRecord.content == base) return false           // server unchanged since base
+        val base = existing.lastSyncedContent
+        if (base != null && remoteRecord.content == base) return false  // server unchanged since base
         val entityOps = store.getPendingOpsForEntity(existing.localId)
         if (entityOps.any { it.type == OpType.DELETE_RECORD }) return false  // local delete wins
 

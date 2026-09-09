@@ -494,6 +494,56 @@ class SyncEngineTest {
             "Without a merger the merge base is left untouched")
     }
 
+    @Test
+    fun pendingRecord_withMerger_nullBase_fillsUnsetFieldsFromServer() = runTest {
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+
+        store.lists["L1"] = localList("L1", remoteId = "RL1", lastSyncedAt = T0)
+        // Created locally and pushed (has a remoteId) but never pulled back — no merge base.
+        // Local set a title only; never touched notes.
+        store.records["T1"] = localRecord(
+            "T1", "L1", remoteId = "RT1", title = "My title", notes = null, lastSyncedContent = null,
+        )
+        store.pendingOps["op1"] = pendingOp("op1", "T1", "L1", OpType.UPDATE_RECORD, createdAt = T0 + 100)
+        network.listsResponse = listOf(remoteList("RL1"))
+        // Server has the same title plus notes someone added on another device.
+        network.recordsResponse["RL1"] = listOf(
+            remoteRecord("RT1", title = "My title", notes = "notes from another device", remoteUpdatedAt = T0 + 50),
+        )
+
+        engine(store, network, fakeContentMerger).sync()
+
+        assertEquals(FakeContent("My title", "notes from another device"), store.records["T1"]!!.content,
+            "A field the local copy never set is filled from the server even with no merge base")
+        assertEquals(FakeContent("My title", "notes from another device"), store.records["T1"]!!.lastSyncedContent,
+            "The pull advances the merge base so later cycles take the fast path")
+        assertEquals(FakeContent("My title", "notes from another device"), network.updateCalls.single().content,
+            "Flush pushes the filled-in content")
+    }
+
+    @Test
+    fun pendingRecord_withMerger_nullBase_contestedFieldUsesPreferLocal() = runTest {
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+
+        store.lists["L1"] = localList("L1", remoteId = "RL1", lastSyncedAt = T0)
+        store.records["T1"] = localRecord(
+            "T1", "L1", remoteId = "RT1", title = "Local title", notes = null, lastSyncedContent = null,
+        )
+        // Local edit newer than the server's -> local wins the contested title; notes still filled.
+        store.pendingOps["op1"] = pendingOp("op1", "T1", "L1", OpType.UPDATE_RECORD, createdAt = T0 + 900)
+        network.listsResponse = listOf(remoteList("RL1"))
+        network.recordsResponse["RL1"] = listOf(
+            remoteRecord("RT1", title = "Server title", notes = "server notes", remoteUpdatedAt = T0 + 10),
+        )
+
+        engine(store, network, fakeContentMerger).sync()
+
+        assertEquals(FakeContent("Local title", "server notes"), store.records["T1"]!!.content,
+            "Contested field -> preferLocal (newer local edit); unset field -> server value")
+    }
+
     // -----------------------------------------------------------------------
     // Concurrency — writeMutex
     // -----------------------------------------------------------------------
