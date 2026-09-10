@@ -173,7 +173,8 @@ class PendingOpsProcessor<T, TList>(
         } catch (e: Exception) {
             SyncError(
                 occurredAt = Clock.System.now().toEpochMilliseconds(),
-                kind = errorClassifier.classifySpecial(e) ?: SyncErrorKind.PUSH_FAILED,
+                kind = errorClassifier.classifySpecial(e)
+                    ?: if (isConnectivityException(e)) SyncErrorKind.OFFLINE else SyncErrorKind.PUSH_FAILED,
                 entityLocalId = op.entityLocalId,
                 httpStatus = errorClassifier.httpStatus(e),
                 message = e.message ?: "Unknown error",

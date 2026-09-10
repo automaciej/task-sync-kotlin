@@ -230,6 +230,10 @@ internal class FakeNetworkSource : NetworkSource<FakeContent, FakeListContent> {
     internal data class MoveCall(val source: String, val remoteId: String, val dest: String, val previous: String?)
     /** Test hook invoked at the start of every [getLists] call — e.g. to detect/force overlap. */
     var onGetLists: (suspend () -> Unit)? = null
+    /** When set, every [getRecords] call throws this — simulates a mid-pull transport failure. */
+    var getRecordsError: Exception? = null
+    /** When set, every [createRecord] call throws this — simulates a push-side transport failure. */
+    var createRecordError: Exception? = null
 
     override suspend fun getLists(): List<RemoteListRecord<FakeListContent>> {
         onGetLists?.invoke()
@@ -244,10 +248,12 @@ internal class FakeNetworkSource : NetworkSource<FakeContent, FakeListContent> {
 
     override suspend fun getRecords(remoteListId: String, updatedMin: Long?): List<RemoteRecord<FakeContent>> {
         updatedMinCapture[remoteListId] = updatedMin
+        getRecordsError?.let { throw it }
         return recordsResponse[remoteListId] ?: emptyList()
     }
 
     override suspend fun createRecord(remoteListId: String, content: FakeContent): RemoteRecord<FakeContent> {
+        createRecordError?.let { throw it }
         if (remoteListId in failingListIds) {
             throw IllegalStateException("404 Not Found: list $remoteListId does not exist")
         }

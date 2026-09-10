@@ -1,6 +1,19 @@
 package pl.blizinski.tasksync
 
-enum class SyncErrorKind { PUSH_FAILED, PULL_FAILED, AUTH_FAILED, CONSENT_REQUIRED, ADVANCED_PROTECTION }
+enum class SyncErrorKind {
+    PUSH_FAILED,
+    PULL_FAILED,
+    AUTH_FAILED,
+    CONSENT_REQUIRED,
+    ADVANCED_PROTECTION,
+
+    /**
+     * A transport-level connectivity failure (no network, DNS failure, connection reset, socket
+     * timeout). Distinct from [PUSH_FAILED]/[PULL_FAILED] so a consumer can treat it as expected
+     * environmental noise — see [isConnectivityException] and [SyncEngine.offlineResult].
+     */
+    OFFLINE,
+}
 
 data class SyncError(
     val occurredAt: Long,

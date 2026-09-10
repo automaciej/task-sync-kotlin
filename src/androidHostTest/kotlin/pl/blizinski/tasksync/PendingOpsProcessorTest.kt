@@ -172,4 +172,21 @@ class PendingOpsProcessorTest {
         assertEquals(1, store.pendingOps["op1"]?.attemptCount)
         assertEquals(OpStatus.FAILED, store.pendingOps["op1"]?.status)
     }
+
+    @Test
+    fun pushFailingWithConnectivityError_isClassifiedAsOffline() = runTest {
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+        network.createRecordError = java.net.UnknownHostException("Unable to resolve host")
+        store.lists["L1"] = localList("L1", remoteId = "RL1")
+        store.records["T1"] = localRecord("T1", "L1", remoteId = null, title = "New Task")
+        store.pendingOps["op1"] = PendingOp(
+            id = "op1", type = OpType.CREATE_RECORD, entityLocalId = "T1", listLocalId = "L1",
+            contentJson = contentJson("New Task"), createdAt = 0L,
+        )
+
+        val errors = processor(store, network).flush()
+
+        assertEquals(SyncErrorKind.OFFLINE, errors.single().kind)
+    }
 }

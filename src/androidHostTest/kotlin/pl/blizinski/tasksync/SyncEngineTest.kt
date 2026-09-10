@@ -20,13 +20,14 @@ class SyncEngineTest {
         store: FakeLocalStore,
         network: FakeNetworkSource,
         merger: pl.blizinski.tasksync.store.ContentMerger<FakeContent>? = null,
+        isOnline: () -> Boolean = { true },
     ): SyncEngine<FakeContent, FakeListContent> {
         val errorClassifier = FakeSyncErrorClassifier()
         val pendingOps = PendingOpsProcessor(
             store, network, serializer<FakeContent>(), errorClassifier,
             pushLatestEntityContent = merger != null,
         )
-        return SyncEngine(store, network, pendingOps, errorClassifier, merger = merger)
+        return SyncEngine(store, network, pendingOps, errorClassifier, isOnline = isOnline, merger = merger)
     }
 
     // -----------------------------------------------------------------------
@@ -572,5 +573,58 @@ class SyncEngineTest {
         job2.join()
 
         assertEquals(1, maxInFlight, "Two concurrent sync() calls should never run their bodies at the same time")
+    }
+
+    // -----------------------------------------------------------------------
+    // Connectivity failures classified as OFFLINE
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun sync_whenIsOnlineFalse_reportsOfflineKind() = runTest {
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+
+        val result = engine(store, network, isOnline = { false }).sync()
+
+        assertEquals(SyncErrorKind.OFFLINE, result.errors.single().kind)
+    }
+
+    @Test
+    fun sync_whenPullThrowsDnsFailure_reportsOfflineKind() = runTest {
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+        store.lists["L1"] = localList("L1", remoteId = "RL1", lastSyncedAt = null)
+        network.onGetLists = {
+            throw java.net.UnknownHostException("Unable to resolve host \"tasks.googleapis.com\"")
+        }
+
+        val result = engine(store, network).sync()
+
+        assertEquals(SyncErrorKind.OFFLINE, result.errors.single().kind)
+    }
+
+    @Test
+    fun sync_whenGetRecordsThrowsSocketTimeout_reportsOfflineKind() = runTest {
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+        store.lists["L1"] = localList("L1", remoteId = "RL1", lastSyncedAt = null)
+        network.listsResponse = listOf(remoteList("RL1"))
+        network.getRecordsError = java.net.SocketTimeoutException("timeout")
+
+        val result = engine(store, network).sync()
+
+        assertEquals(SyncErrorKind.OFFLINE, result.errors.single().kind)
+    }
+
+    @Test
+    fun sync_whenPullThrowsNonConnectivityError_staysPullFailed() = runTest {
+        val store = FakeLocalStore()
+        val network = FakeNetworkSource()
+        store.lists["L1"] = localList("L1", remoteId = "RL1", lastSyncedAt = null)
+        network.onGetLists = { throw IllegalStateException("boom") }
+
+        val result = engine(store, network).sync()
+
+        assertEquals(SyncErrorKind.PULL_FAILED, result.errors.single().kind)
     }
 }

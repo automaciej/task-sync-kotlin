@@ -77,13 +77,23 @@ class SyncEngine<T, TList>(
         errors = listOf(
             SyncError(
                 occurredAt = Clock.System.now().toEpochMilliseconds(),
-                kind = SyncErrorKind.PULL_FAILED,
+                kind = SyncErrorKind.OFFLINE,
                 entityLocalId = null,
                 httpStatus = null,
                 message = "No network connection available",
             )
         ),
     )
+
+    /**
+     * Kind for a pull-side exception that isn't one of [SyncErrorClassifier]'s specifically-known
+     * kinds: [SyncErrorKind.OFFLINE] when it's a transport-level connectivity failure that slipped
+     * past the [isOnline] pre-check (e.g. a DNS failure on a network the OS still reports as up),
+     * otherwise the generic [SyncErrorKind.PULL_FAILED].
+     */
+    private fun classifyPullFailure(e: Exception): SyncErrorKind =
+        errorClassifier.classifySpecial(e)
+            ?: if (isConnectivityException(e)) SyncErrorKind.OFFLINE else SyncErrorKind.PULL_FAILED
 
     suspend fun sync(): SyncResult {
         if (!isOnline()) return offlineResult()
@@ -136,7 +146,7 @@ class SyncEngine<T, TList>(
             listOf(
                 SyncError(
                     occurredAt = Clock.System.now().toEpochMilliseconds(),
-                    kind = if (pullConsentIntent != null) SyncErrorKind.CONSENT_REQUIRED else (errorClassifier.classifySpecial(e) ?: SyncErrorKind.PULL_FAILED),
+                    kind = if (pullConsentIntent != null) SyncErrorKind.CONSENT_REQUIRED else classifyPullFailure(e),
                     entityLocalId = null,
                     httpStatus = errorClassifier.httpStatus(e),
                     message = e.message ?: "Unknown error during pull",
@@ -210,7 +220,7 @@ class SyncEngine<T, TList>(
                 }
                 errors += SyncError(
                     occurredAt = now,
-                    kind = (errorClassifier.classifySpecial(e) ?: SyncErrorKind.PULL_FAILED),
+                    kind = classifyPullFailure(e),
                     entityLocalId = null,
                     httpStatus = errorClassifier.httpStatus(e),
                     message = e.message ?: "Failed fetching records for list ${remoteList.remoteId}",
