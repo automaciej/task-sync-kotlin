@@ -70,3 +70,12 @@ kotlin {
 dependencies {
     add("kspAndroid", libs.room.compiler)
 }
+
+// Don't publish Gradle Module Metadata. JitPack serves this library at the synthetic flat
+// coordinate `com.github.automaciej:task-sync-kotlin:<tag>` as POM + stub jar; when a `.module`
+// file is also present, JitPack's flat-coordinate synthesis emits the POM but not the stub jar
+// it references, and downstream resolution fails with "Could not find task-sync-kotlin-<tag>.jar"
+// (seen releasing v0.4.0). The only consumers are JitPack (flat POM+jar) and the local
+// sibling-checkout composite build (uses the live project model, not published metadata), so
+// nothing needs the `.module`.
+tasks.withType<GenerateModuleMetadata>().configureEach { enabled = false }
