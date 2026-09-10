@@ -145,11 +145,23 @@ class DefaultTaskStore<T, TList>(
         localId
     }
 
+    /**
+     * The pre-edit copy of [entity], capturing a three-way merge base from its current content
+     * when the record has a server counterpart but no stored base yet — rows written before
+     * `lastSyncedContent` was persisted, or a record edited before its first clean pull-back.
+     * Without this, a following offline edit reaches [SyncEngine] with no base and a concurrent
+     * remote edit can only be reconciled by last-writer-wins.
+     */
+    private fun captureMergeBase(entity: SyncedRecord<T>): SyncedRecord<T> =
+        if (entity.remoteId != null && entity.lastSyncedContent == null)
+            entity.copy(lastSyncedContent = entity.content)
+        else entity
+
     override suspend fun updateTask(localId: String, draft: TaskDraft): Unit = guardWrite(onError = Unit) {
         val entity = store.getRecordByLocalId(localId) ?: return@guardWrite
         val ts = now()
         val newContent = adapter.applyDraft(entity.content, draft)
-        store.upsertRecord(entity.copy(content = newContent))
+        store.upsertRecord(captureMergeBase(entity).copy(content = newContent))
         store.enqueuePendingOp(
             PendingOp(
                 id = newId(), type = OpType.UPDATE_RECORD, entityLocalId = localId, listLocalId = entity.listLocalId,
@@ -162,7 +174,7 @@ class DefaultTaskStore<T, TList>(
     override suspend fun completeTask(localId: String): Unit = guardWrite(onError = Unit) {
         val entity = store.getRecordByLocalId(localId) ?: return@guardWrite
         val ts = now()
-        store.upsertRecord(entity.copy(isCompleted = true, content = adapter.applyCompletion(entity.content, completed = true, at = ts)))
+        store.upsertRecord(captureMergeBase(entity).copy(isCompleted = true, content = adapter.applyCompletion(entity.content, completed = true, at = ts)))
         store.enqueuePendingOp(
             PendingOp(id = newId(), type = OpType.COMPLETE_RECORD, entityLocalId = localId, listLocalId = entity.listLocalId, createdAt = ts),
         )
@@ -172,7 +184,7 @@ class DefaultTaskStore<T, TList>(
     override suspend fun uncompleteTask(localId: String): Unit = guardWrite(onError = Unit) {
         val entity = store.getRecordByLocalId(localId) ?: return@guardWrite
         val ts = now()
-        store.upsertRecord(entity.copy(isCompleted = false, content = adapter.applyCompletion(entity.content, completed = false, at = null)))
+        store.upsertRecord(captureMergeBase(entity).copy(isCompleted = false, content = adapter.applyCompletion(entity.content, completed = false, at = null)))
         store.enqueuePendingOp(
             PendingOp(id = newId(), type = OpType.UNCOMPLETE_RECORD, entityLocalId = localId, listLocalId = entity.listLocalId, createdAt = ts),
         )

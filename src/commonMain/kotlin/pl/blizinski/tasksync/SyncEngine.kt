@@ -363,7 +363,11 @@ class SyncEngine<T, TList>(
         } else {
             val changed = existing.content != remoteRecord.content || existing.isCompleted != remoteRecord.isCompleted
             val listChanged = existing.listLocalId != listLocalId
-            if (changed) {
+            // Also refresh the synced state (not just on a content change) when the stored merge
+            // base is missing or stale — e.g. rows written before lastSyncedContent was
+            // persisted, or a record whose base drifted. Without this a later offline edit has
+            // no base and [mergePendingRecord] can only fall back to last-writer-wins.
+            if (changed || existing.lastSyncedContent != remoteRecord.content) {
                 store.updateRecordSyncedState(
                     localId = existing.localId,
                     content = remoteRecord.content,
